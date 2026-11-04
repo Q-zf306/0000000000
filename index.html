@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>流 · 丝线</title>
+<style>
+  html,body{margin:0;height:100%;background:#0e1326;overflow:hidden;cursor:crosshair}
+  canvas{display:block}
+  .verse{
+    position:fixed;left:50%;bottom:34px;transform:translateX(-50%);
+    color:#cdd3e6;font:300 15px/1.7 "Songti SC","Noto Serif SC",serif;
+    letter-spacing:.32em;opacity:0;pointer-events:none;
+    text-shadow:0 0 18px rgba(160,170,210,.25);transition:opacity 2.6s ease;
+    white-space:nowrap;
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div class="verse" id="verse">思绪如丝 · 随风而流 · 终归于静</div>
+<script>
+const cv = document.getElementById('c');
+const ctx = cv.getContext('2d');
+let W, H, DPR, bgGrad;
+function resize(){
+  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  W = window.innerWidth; H = window.innerHeight;
+  cv.width = W * DPR; cv.height = H * DPR;
+  cv.style.width = W + 'px'; cv.style.height = H + 'px';
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  // 深暮渐变背景（不是纯黑虚空，偏安静的靛紫）
+  bgGrad = ctx.createLinearGradient(0, 0, 0, H);
+  bgGrad.addColorStop(0, '#0e1326');
+  bgGrad.addColorStop(1, '#171225');
+}
+window.addEventListener('resize', resize);
+resize();
+
+// 带种子的伪随机（只生成一次，保证可复现）
+function mulberry32(a){
+  return function(){
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+const rnd = mulberry32(20261104);
+
+const N = 820;            // 丝线数量（更稀，留呼吸感）
+const K = 14;             // 每根丝线保留的轨迹点（更短，更柔）
+const P = [];
+for (let i = 0; i < N; i++){
+  const roll = rnd();
+  // 三色都偏柔：淡薰衣草 / 淡青 / 极少淡玫瑰（情绪的一点温度，非火星）
+  let hue, sat, light;
+  if (roll < 0.06)      { hue = 350; sat = 28; light = 82; }   // 极少量柔玫瑰
+  else if (roll < 0.5)  { hue = 255; sat = 30; light = 83; }   // 淡薰衣草
+  else                  { hue = 192; sat = 32; light = 81; }   // 淡青
+  P.push({
+    x: rnd() * W, y: rnd() * H,
+    hue, sat, light,
+    sp: 0.5 + rnd() * 0.8,
+    seed: rnd() * 1000,
+    trail: []
+  });
+}
+
+// 看不见的风 = 多层正弦叠加的平滑向量场；整体带一个缓慢摆动的基础风向，
+// 让丝线大体同向飘（像风），而不是乱转成蛛网。
+function field(x, y, t){
+  const ax = Math.sin(y * 0.0012 + t * 0.10) + 0.55 * Math.sin(x * 0.0008 - t * 0.06) + 0.5;
+  const ay = Math.cos(x * 0.0009 - t * 0.08) + 0.55 * Math.cos(y * 0.0011 + t * 0.05) + 0.12 * Math.sin(t * 0.04);
+  return { ax, ay };
+}
+
+function smooth(e0, e1, x){
+  const t = Math.max(0, Math.min(1, (x - e0) / (e1 - e0)));
+  return t * t * (3 - 2 * t);
+}
+
+const mouse = { x: -1e4, y: -1e4, on: false };
+window.addEventListener('mousemove', e => { mouse.x = e.clientX; mouse.y = e.clientY; mouse.on = true; });
+window.addEventListener('mouseleave', () => { mouse.on = false; });
+
+const start = performance.now();
+function frame(now){
+  const t = (now - start) / 1000;
+
+  // 能量：比之前更温和——开场就不躁动，18 秒内缓降至平静，之后呼吸般轻浮
+  const settle = 1 - 0.54 * smooth(0, 18, t);
+  const breathe = 0.90 + 0.10 * Math.sin(t * 0.10);
+  const energy = (0.70 + 0.30 * settle) * breathe;   // 约 0.7 → 0.32
+
+  // 用半透明暮色覆盖（留下丝线残影，同时维持柔背景而非纯黑）
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.globalAlpha = 0.07;
+  ctx.fillStyle = bgGrad;
+  ctx.fillRect(0, 0, W, H);
+  ctx.globalAlpha = 1;
+
+  // 极淡的中心柔光（像月光/晨光，安顿画面）
+  const g = ctx.createRadialGradient(W/2, H*0.52, 0, W/2, H*0.52, Math.max(W,H)*0.55);
+  g.addColorStop(0, 'rgba(120,130,180,0.05)');
+  g.addColorStop(1, 'rgba(120,130,180,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+
+  const windA = 0.35 * Math.sin(t * 0.05);     // 基础风向缓慢摆动
+  const bwx = Math.cos(windA), bwy = Math.sin(windA) * 0.35;
+
+  for (const p of P){
+    const f = field(p.x + p.seed, p.y - p.seed, t);
+    // 场向量混合一个同向基础风，得到连贯的"风"感
+    let ux = f.ax * 0.7 + bwx * 0.6;
+    let uy = f.ay * 0.7 + bwy * 0.6;
+    const len = Math.hypot(ux, uy) || 1;
+    ux /= len; uy /= len;
+
+    // 鼠标柔和排开
+    if (mouse.on){
+      const dx = p.x - mouse.x, dy = p.y - mouse.y;
+      const d2 = dx * dx + dy * dy;
+      if (d2 < 220 * 220){
+        const d = Math.sqrt(d2) || 1;
+        const push = (1 - d / 220) * 1.8;
+        ux += (dx / d) * push; uy += (dy / d) * push;
+        const l2 = Math.hypot(ux, uy) || 1; ux /= l2; uy /= l2;
+      }
+    }
+
+    const speed = (1.0 + p.sp) * (0.9 + 0.5 * (f.ax * f.ax + f.ay * f.ay) / 9) * energy;
+    let nx = p.x + ux * speed * 1.4;
+    let ny = p.y + uy * speed * 1.4;
+
+    if (nx < -30 || nx > W + 30 || ny < -30 || ny > H + 30){
+      nx = rnd() * W; ny = rnd() * H;
+      p.trail.length = 0;
+    }
+    p.x = nx; p.y = ny;
+
+    p.trail.push({ x: p.x, y: p.y });
+    if (p.trail.length > K) p.trail.shift();
+
+    const tr = p.trail;
+    if (tr.length > 1){
+      ctx.beginPath();
+      ctx.moveTo(tr[0].x, tr[0].y);
+      for (let i = 1; i < tr.length; i++) ctx.lineTo(tr[i].x, tr[i].y);
+      const alpha = 0.05 + 0.09 * energy;
+      ctx.strokeStyle = `hsla(${p.hue},${p.sat}%,${p.light}%,${alpha})`;
+      ctx.lineWidth = 1.0;
+      ctx.stroke();
+
+      const head = tr[tr.length - 1];
+      ctx.fillStyle = `hsla(${p.hue},${p.sat}%,${Math.min(92,p.light+8)}%,${0.07 + 0.07 * energy})`;
+      ctx.beginPath();
+      ctx.arc(head.x, head.y, 0.8, 0, 6.2832);
+      ctx.fill();
+    }
+  }
+
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+const verse = document.getElementById('verse');
+setTimeout(() => { verse.style.opacity = '0.7'; }, 600);
+setTimeout(() => { verse.style.opacity = '0'; }, 12000);
+</script>
+</body>
+</html>
